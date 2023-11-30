@@ -53,6 +53,8 @@
              bool, true)                                                                                               \
   LIST_ENTRY(rgb_point_cloud,                                                                                          \
              "Add RGB camera data to the point cloud. Requires point_cloud=true and color_enabled=true", bool, false)  \
+  LIST_ENTRY(seg_point_cloud,                                                                                          \
+             "Add seg camera data to the point cloud. Requires rgb_point_cloud=true, point_cloud=true and color_enabled=true", bool, false)  \
   LIST_ENTRY(point_cloud_in_depth_frame,                                                                               \
              "Whether the RGB pointcloud is rendered in the depth frame (true) or RGB frame (false). Will either "     \
              "match the resolution of the depth camera (true) or the RGB camera (false)",                              \

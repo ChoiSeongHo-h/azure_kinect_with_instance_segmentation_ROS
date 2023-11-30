@@ -54,6 +54,17 @@ void K4ACalibrationTransformData::initialize(const K4AROSDeviceParams params)
   {
     point_cloud_image_ = k4a::image::create(K4A_IMAGE_FORMAT_DEPTH16, getColorWidth(), getColorHeight(),
                                             getColorWidth() * 3 * (int) sizeof(DepthPixel));
+
+    if (params.seg_point_cloud)
+    {
+      int num_resources = 10;
+      for(int i = 0; i<num_resources; ++i)
+      {
+        k4a::image point_cloud_image_resource = k4a::image::create(K4A_IMAGE_FORMAT_DEPTH16, getColorWidth(), getColorHeight(),
+                                            getColorWidth() * 3 * (int) sizeof(DepthPixel));
+        point_cloud_image_resources_.emplace(point_cloud_image_resource);
+      }
+    }
   }
 
   if (depthEnabled && colorEnabled)

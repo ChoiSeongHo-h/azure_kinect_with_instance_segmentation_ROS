@@ -9,6 +9,7 @@
 #include <atomic>
 #include <mutex>
 #include <thread>
+#include <queue>
 
 // Library headers
 //
@@ -24,6 +25,7 @@
 #include <k4a/k4a.hpp>
 #include <k4arecord/playback.hpp>
 #include <camera_info_manager/camera_info_manager.h>
+#include <opencv2/opencv.hpp>
 
 #if defined(K4A_BODY_TRACKING)
 #include <visualization_msgs/MarkerArray.h>
@@ -31,7 +33,6 @@
 #include <tf2_ros/transform_broadcaster.h>
 #include <geometry_msgs/TransformStamped.h>
 #include <geometry_msgs/Pose.h>
-#include <opencv2/opencv.hpp>
 #include <image_geometry/pinhole_camera_model.h>
 #include <tf2_ros/transform_listener.h>
 #include <tf2_geometry_msgs/tf2_geometry_msgs.h>
@@ -60,6 +61,7 @@ class K4AROSDevice
   k4a_result_t getPointCloud(const k4a::capture& capture, sensor_msgs::PointCloud2Ptr& point_cloud);
 
   k4a_result_t getRgbPointCloudInRgbFrame(const k4a::capture& capture, sensor_msgs::PointCloud2Ptr& point_cloud);
+  k4a_result_t getSegPointCloudInRgbFrame(const k4a::capture& capture, const ros::Time& capture_time_rgb, sensor_msgs::PointCloud2Ptr& point_cloud);
   k4a_result_t getRgbPointCloudInDepthFrame(const k4a::capture& capture, sensor_msgs::PointCloud2Ptr& point_cloud);
 
   k4a_result_t getImuFrame(const k4a_imu_sample_t& capture, sensor_msgs::ImuPtr& imu_frame);
@@ -89,8 +91,12 @@ k4a_result_t getBodyMarker(const k4abt_body_t& body, visualization_msgs::MarkerP
   k4a_result_t fillPointCloud(const k4a::image& pointcloud_image, sensor_msgs::PointCloud2Ptr& point_cloud);
   k4a_result_t fillColorPointCloud(const k4a::image& pointcloud_image, const k4a::image& color_image,
                                    sensor_msgs::PointCloud2Ptr& point_cloud);
+  k4a_result_t fillSegPointCloud(const k4a::image& pointcloud_image, const cv::Mat& clss_image, const cv::Mat& instance_image,
+                                   sensor_msgs::PointCloud2Ptr& point_cloud);
 
   void framePublisherThread();
+  void clssSegCallback(const sensor_msgs::Image::ConstPtr& image_msg);
+  void instanceSegCallback(const sensor_msgs::Image::ConstPtr& image_msg);
 #if defined(K4A_BODY_TRACKING)
   void bodyPublisherThread();
 #endif
@@ -145,6 +151,10 @@ k4a_result_t getBodyMarker(const k4abt_body_t& body, visualization_msgs::MarkerP
 
   ros::Publisher pointcloud_publisher_;
 
+  image_transport::Subscriber clss_seg_subscriber_;
+
+  image_transport::Subscriber instance_seg_subscriber_;
+
   std::shared_ptr<camera_info_manager::CameraInfoManager> ci_mngr_rgb_, ci_mngr_ir_;
 
 #if defined(K4A_BODY_TRACKING)
@@ -172,6 +182,12 @@ k4a_result_t getBodyMarker(const k4abt_body_t& body, visualization_msgs::MarkerP
   k4a::playback k4a_playback_handle_;
   std::mutex k4a_playback_handle_mutex_;
 
+  // seg subscriber
+  std::queue<std::pair<ros::Time, cv::Mat>> clss_seg_buffer_;
+  std::queue<std::pair<ros::Time, cv::Mat>> instance_seg_buffer_;
+  std::mutex clss_seg_buffer_mutex_;
+  std::mutex instance_seg_buffer_mutex_;
+
 #if defined(K4A_BODY_TRACKING)
   // Body tracker
   k4abt::tracker k4abt_tracker_;
@@ -196,6 +212,7 @@ k4a_result_t getBodyMarker(const k4abt_body_t& body, visualization_msgs::MarkerP
 
   // Threads
   std::thread frame_publisher_thread_;
+  std::thread seg_subscriber_thread_;
   std::thread imu_publisher_thread_;
 };
 

@@ -45,6 +45,7 @@ Licensed under the MIT License.
       <param name="fps"               value="30" />
       <param name="point_cloud"       value="false" />
       <param name="rgb_point_cloud"   value="false" />
+      <param name="seg_point_cloud"   value="false" />
       <param name="required"          value="true" />
       <param name="imu_rate_target"   value="100" />
 

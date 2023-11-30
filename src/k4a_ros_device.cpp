@@ -19,6 +19,7 @@
 #include <sensor_msgs/point_cloud2_iterator.h>
 #include <k4a/k4a.hpp>
 #include <unordered_map>
+#include <opencv2/opencv.hpp>
 
 // Project headers
 //
@@ -275,6 +276,11 @@ K4AROSDevice::K4AROSDevice(const NodeHandle& n, const NodeHandle& p)
 
   if (params_.point_cloud || params_.rgb_point_cloud) {
     pointcloud_publisher_ = node_.advertise<PointCloud2>("points2", 1);
+
+    if (params_.seg_point_cloud) {
+      clss_seg_subscriber_ = image_transport_.subscribe("/seg/clss_seg", 1, &K4AROSDevice::clssSegCallback, this);
+      instance_seg_subscriber_ = image_transport_.subscribe("/seg/instance_seg", 1, &K4AROSDevice::instanceSegCallback, this);
+    }
   }
 
   if (k4a_playback_handle_) {
@@ -334,6 +340,11 @@ K4AROSDevice::~K4AROSDevice()
   ROS_INFO("Joining IMU publisher thread");
   imu_publisher_thread_.join();
   ROS_INFO("IMU publisher thread joined");
+
+  // Join the subscriber thread
+  ROS_INFO("Joining seg subscriber thread");
+  seg_subscriber_thread_.join();
+  ROS_INFO("seg subscriber thread joined");
 
   stopCameras();
   stopImu();
@@ -648,6 +659,117 @@ k4a_result_t K4AROSDevice::getRgbPointCloudInRgbFrame(const k4a::capture& captur
   return fillColorPointCloud(calibration_data_.point_cloud_image_, k4a_bgra_frame, point_cloud);
 }
 
+k4a_result_t K4AROSDevice::getSegPointCloudInRgbFrame(const k4a::capture& capture, const ros::Time& capture_time_rgb,
+                                                      sensor_msgs::PointCloud2Ptr& point_cloud)
+{
+  k4a::image k4a_depth_frame = capture.get_depth_image();
+  if (!k4a_depth_frame)
+  {
+    ROS_ERROR("Cannot render RGB point cloud: no depth frame");
+    return K4A_RESULT_FAILED;
+  }
+
+  // transform depth image into color camera geometry
+  calibration_data_.k4a_transformation_.depth_image_to_color_camera(k4a_depth_frame,
+                                                                    &calibration_data_.transformed_depth_image_);
+
+  auto& resources = calibration_data_.point_cloud_image_resources_;
+  auto& buffer = calibration_data_.point_cloud_image_buffer_;
+  if (resources.empty())
+  {
+    auto resource = buffer.front().second;
+    buffer.pop();
+
+    resources.emplace(resource);
+  }
+  auto resource = resources.front();
+  resources.pop();
+
+  // Tranform depth image to point cloud (note that this is now from the perspective of the color camera)
+  calibration_data_.k4a_transformation_.depth_image_to_point_cloud(
+      calibration_data_.transformed_depth_image_, K4A_CALIBRATION_TYPE_COLOR, &resource);
+
+  buffer.emplace(make_pair(capture_time_rgb, resource));
+
+  bool can_seg = false;
+  k4a::image point_cloud_image;
+  cv::Mat clss_image;
+  cv::Mat instance_image;
+  ros::Time point_cloud_time;
+
+  {
+    std::lock_guard<std::mutex> lg_clss(clss_seg_buffer_mutex_);
+    std::lock_guard<std::mutex> lg_instance(instance_seg_buffer_mutex_);
+
+    ROS_INFO("%ld %ld %ld\n", buffer.size(), clss_seg_buffer_.size(), instance_seg_buffer_.size());
+
+    while (!buffer.empty() && !clss_seg_buffer_.empty() && !instance_seg_buffer_.empty())
+    {
+if (!buffer.empty() && !clss_seg_buffer_.empty() && !instance_seg_buffer_.empty())
+ROS_INFO("%ld %ld %ld\n", buffer.front().first.toNSec(), clss_seg_buffer_.front().first.toNSec(), instance_seg_buffer_.front().first.toNSec());
+      
+      auto pointcloud_time = buffer.front().first.toNSec();
+      auto clss_time = clss_seg_buffer_.front().first.toNSec();
+      auto instance_time = instance_seg_buffer_.front().first.toNSec();
+
+      auto latest = pointcloud_time;
+      latest = std::max(latest, clss_time);
+      latest = std::max(latest, instance_time);
+
+      if (latest == pointcloud_time && latest == clss_time && latest == instance_time)
+      {
+        can_seg = true;
+        break;
+      }
+
+      if (pointcloud_time < latest)
+      {
+        auto resource = buffer.front().second;
+        buffer.pop();
+
+        resources.emplace(resource);
+      }
+
+      if (clss_time < latest)
+        clss_seg_buffer_.pop();
+
+      if (instance_time < latest)
+        instance_seg_buffer_.pop();
+    }
+
+    if (can_seg)
+    {
+      point_cloud_time = buffer.front().first;
+
+      point_cloud_image = buffer.front().second;
+      buffer.pop();
+      resources.push(point_cloud_image);
+
+      clss_image = cv::Mat(clss_seg_buffer_.front().second);
+      clss_seg_buffer_.pop();
+
+      instance_image = cv::Mat(instance_seg_buffer_.front().second);
+      instance_seg_buffer_.pop();
+    }
+  }
+
+  point_cloud->header.frame_id = calibration_data_.tf_prefix_ + calibration_data_.rgb_camera_frame_;
+  point_cloud->header.stamp = point_cloud_time;
+
+  if (!can_seg)
+  {
+    point_cloud->height = 0;
+    point_cloud->width = 0;
+    point_cloud->is_dense = false;
+    point_cloud->is_bigendian = false;
+    return K4A_RESULT_SUCCEEDED;
+  }
+
+  cv::imshow("test", instance_image);
+  cv::waitKey(1);
+  return fillSegPointCloud(point_cloud_image, clss_image, instance_image, point_cloud);
+}
+
 k4a_result_t K4AROSDevice::getPointCloud(const k4a::capture& capture, sensor_msgs::PointCloud2Ptr& point_cloud)
 {
   k4a::image k4a_depth_frame = capture.get_depth_image();
@@ -721,6 +843,67 @@ k4a_result_t K4AROSDevice::fillColorPointCloud(const k4a::image& pointcloud_imag
       *iter_r = color_buffer[4 * i + 2];
       *iter_g = color_buffer[4 * i + 1];
       *iter_b = color_buffer[4 * i + 0];
+    }
+  }
+
+  return K4A_RESULT_SUCCEEDED;
+}
+
+k4a_result_t K4AROSDevice::fillSegPointCloud(const k4a::image& pointcloud_image, const cv::Mat& clss_image, const cv::Mat& instance_image,
+                                   sensor_msgs::PointCloud2Ptr& point_cloud)
+{
+  point_cloud->height = pointcloud_image.get_height_pixels();
+  point_cloud->width = pointcloud_image.get_width_pixels();
+  point_cloud->is_dense = false;
+  point_cloud->is_bigendian = false;
+
+  const float y_ratio = 1.0 / (float(pointcloud_image.get_height_pixels()) / 480.0);
+  const float x_ratio = 1.0 / (float(pointcloud_image.get_width_pixels()) / 640.0);
+
+  const size_t point_count = pointcloud_image.get_height_pixels() * pointcloud_image.get_width_pixels();
+
+  sensor_msgs::PointCloud2Modifier pcd_modifier(*point_cloud);
+  pcd_modifier.setPointCloud2FieldsByString(2, "xyz", "rgb");
+
+  sensor_msgs::PointCloud2Iterator<float> iter_x(*point_cloud, "x");
+  sensor_msgs::PointCloud2Iterator<float> iter_y(*point_cloud, "y");
+  sensor_msgs::PointCloud2Iterator<float> iter_z(*point_cloud, "z");
+
+  sensor_msgs::PointCloud2Iterator<uint8_t> iter_r(*point_cloud, "r");
+  sensor_msgs::PointCloud2Iterator<uint8_t> iter_g(*point_cloud, "g");
+  sensor_msgs::PointCloud2Iterator<uint8_t> iter_b(*point_cloud, "b");
+
+  pcd_modifier.resize(point_count);
+
+  const int16_t* point_cloud_buffer = reinterpret_cast<const int16_t*>(pointcloud_image.get_buffer());
+  const uint8_t* instance_buffer = instance_image.data;
+
+  for (size_t point_idx = 0; point_idx < point_count; point_idx++, ++iter_x, ++iter_y, ++iter_z, ++iter_r, ++iter_g, ++iter_b)
+  {
+    // Z in image frame:
+    float z = static_cast<float>(point_cloud_buffer[3 * point_idx + 2]);
+    // Instance value:
+    size_t point_y = point_idx / pointcloud_image.get_width_pixels();
+    size_t point_x = point_idx % pointcloud_image.get_width_pixels();
+    size_t seg_y = size_t(float(point_y) * y_ratio);
+    size_t seg_x = size_t(float(point_x) * x_ratio);
+    size_t seg_idx = seg_x + 640 * seg_y;
+    uint8_t instance = instance_buffer[seg_idx];
+    if (z <= 0.0f || instance == 0)
+    {
+      *iter_x = *iter_y = *iter_z = std::numeric_limits<float>::quiet_NaN();
+      *iter_r = *iter_g = *iter_b = 0;
+    }
+    else
+    {
+      constexpr float kMillimeterToMeter = 1.0 / 1000.0f;
+      *iter_x = kMillimeterToMeter * static_cast<float>(point_cloud_buffer[3 * point_idx + 0]);
+      *iter_y = kMillimeterToMeter * static_cast<float>(point_cloud_buffer[3 * point_idx + 1]);
+      *iter_z = kMillimeterToMeter * z;
+
+      *iter_r = 255;
+      *iter_g = 255;
+      *iter_b = 255;
     }
   }
 
@@ -1278,7 +1461,14 @@ void K4AROSDevice::framePublisherThread()
         }
         else
         {
-          result = getRgbPointCloudInRgbFrame(capture, point_cloud);
+          if (params_.seg_point_cloud)
+          {
+            result = getSegPointCloudInRgbFrame(capture, capture_time, point_cloud);
+          }
+          else
+          {
+            result = getRgbPointCloudInRgbFrame(capture, point_cloud);
+          }
         }
 
         if (result != K4A_RESULT_SUCCEEDED)
@@ -1317,6 +1507,46 @@ void K4AROSDevice::framePublisherThread()
     ros::spinOnce();
     loop_rate.sleep();
   }
+}
+
+void K4AROSDevice::clssSegCallback(const sensor_msgs::Image::ConstPtr& image_msg)
+{
+  auto input_bridge = cv_bridge::toCvCopy(image_msg, sensor_msgs::image_encodings::MONO8);
+  ros::Time time = image_msg->header.stamp;
+  cv::Mat image = input_bridge->image;
+  size_t max_buff_num = 10;
+
+  {
+    std::lock_guard<std::mutex> lg(clss_seg_buffer_mutex_);
+
+    clss_seg_buffer_.emplace(make_pair(time, image));
+    while (clss_seg_buffer_.size() > max_buff_num)
+    {
+      clss_seg_buffer_.pop();
+    }
+  }
+  
+  ROS_INFO("clss : %ld\n", time.toNSec());
+}
+
+void K4AROSDevice::instanceSegCallback(const sensor_msgs::Image::ConstPtr& image_msg)
+{
+  auto input_bridge = cv_bridge::toCvCopy(image_msg, sensor_msgs::image_encodings::MONO8);
+  ros::Time time = image_msg->header.stamp;
+  cv::Mat image = input_bridge->image;
+  size_t max_buff_num = 10;
+
+  {
+    std::lock_guard<std::mutex> lg(instance_seg_buffer_mutex_);
+
+    instance_seg_buffer_.emplace(make_pair(time, image));
+    while (instance_seg_buffer_.size() > max_buff_num)
+    {
+      instance_seg_buffer_.pop();
+    }
+  }
+
+  ROS_INFO("inst : %ld\n", time.toNSec());
 }
 
 #if defined(K4A_BODY_TRACKING)

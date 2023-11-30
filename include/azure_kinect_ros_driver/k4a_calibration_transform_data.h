@@ -19,6 +19,7 @@
 #include <tf2/LinearMath/Matrix3x3.h>
 #include <tf2/LinearMath/Vector3.h>
 #include <sensor_msgs/CameraInfo.h>
+#include <queue>
 
 // Project headers
 //
@@ -42,6 +43,8 @@ public:
   k4a::transformation k4a_transformation_;
 
   k4a::image point_cloud_image_;
+  std::queue<k4a::image> point_cloud_image_resources_;
+  std::queue<std::pair<ros::Time, k4a::image>> point_cloud_image_buffer_;
   k4a::image transformed_rgb_image_;
   k4a::image transformed_depth_image_;
 
