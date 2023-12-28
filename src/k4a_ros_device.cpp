@@ -67,7 +67,8 @@ K4AROSDevice::K4AROSDevice(const NodeHandle& n, const NodeHandle& p)
     image_transport_(n),
     last_capture_time_usec_(0),
     last_imu_time_usec_(0),
-    imu_stream_end_of_file_(false)
+    imu_stream_end_of_file_(false),
+    is_table_initialized_(false)
 {
   // Collect ROS parameters from the param server or from the command line
 #define LIST_ENTRY(param_variable, param_help_string, param_type, param_default_val) \
@@ -765,8 +766,8 @@ ROS_INFO("%ld %ld %ld\n", buffer.front().first.toNSec(), clss_seg_buffer_.front(
     return K4A_RESULT_SUCCEEDED;
   }
 
-  cv::imshow("test", instance_image);
-  cv::waitKey(1);
+// cv::imshow("test", instance_image);
+// cv::waitKey(1);
   return fillSegPointCloud(point_cloud_image, clss_image, instance_image, point_cloud);
 }
 
@@ -849,6 +850,27 @@ k4a_result_t K4AROSDevice::fillColorPointCloud(const k4a::image& pointcloud_imag
   return K4A_RESULT_SUCCEEDED;
 }
 
+k4a_result_t K4AROSDevice::initialize_table(const int w, const int h)
+{
+  const size_t point_count = w * h;
+  mapping_table_.resize(point_count);
+
+  const float y_ratio = 1.0 / (float(h) / 480.0);
+  const float x_ratio = 1.0 / (float(w) / 640.0);
+
+  for (size_t point_idx = 0; point_idx < point_count; point_idx++)
+  {
+    size_t point_y = point_idx / w;
+    size_t point_x = point_idx % w;
+    size_t seg_y = size_t(float(point_y) * y_ratio);
+    size_t seg_x = size_t(float(point_x) * x_ratio);
+    size_t seg_idx = seg_x + 640 * seg_y;
+    mapping_table_[point_idx] = seg_idx;
+  }
+
+  is_table_initialized_ = true;
+}
+
 k4a_result_t K4AROSDevice::fillSegPointCloud(const k4a::image& pointcloud_image, const cv::Mat& clss_image, const cv::Mat& instance_image,
                                    sensor_msgs::PointCloud2Ptr& point_cloud)
 {
@@ -856,9 +878,6 @@ k4a_result_t K4AROSDevice::fillSegPointCloud(const k4a::image& pointcloud_image,
   point_cloud->width = pointcloud_image.get_width_pixels();
   point_cloud->is_dense = false;
   point_cloud->is_bigendian = false;
-
-  const float y_ratio = 1.0 / (float(pointcloud_image.get_height_pixels()) / 480.0);
-  const float x_ratio = 1.0 / (float(pointcloud_image.get_width_pixels()) / 640.0);
 
   const size_t point_count = pointcloud_image.get_height_pixels() * pointcloud_image.get_width_pixels();
 
@@ -877,18 +896,19 @@ k4a_result_t K4AROSDevice::fillSegPointCloud(const k4a::image& pointcloud_image,
 
   const int16_t* point_cloud_buffer = reinterpret_cast<const int16_t*>(pointcloud_image.get_buffer());
   const uint8_t* instance_buffer = instance_image.data;
+  const uint8_t* clss_buffer = clss_image.data;
+
+  if (!is_table_initialized_)
+    initialize_table(pointcloud_image.get_width_pixels(), pointcloud_image.get_height_pixels());
 
   for (size_t point_idx = 0; point_idx < point_count; point_idx++, ++iter_x, ++iter_y, ++iter_z, ++iter_r, ++iter_g, ++iter_b)
   {
     // Z in image frame:
     float z = static_cast<float>(point_cloud_buffer[3 * point_idx + 2]);
     // Instance value:
-    size_t point_y = point_idx / pointcloud_image.get_width_pixels();
-    size_t point_x = point_idx % pointcloud_image.get_width_pixels();
-    size_t seg_y = size_t(float(point_y) * y_ratio);
-    size_t seg_x = size_t(float(point_x) * x_ratio);
-    size_t seg_idx = seg_x + 640 * seg_y;
+    size_t seg_idx = mapping_table_[point_idx];
     uint8_t instance = instance_buffer[seg_idx];
+    uint8_t clss = clss_buffer[seg_idx];
     if (z <= 0.0f || instance == 0)
     {
       *iter_x = *iter_y = *iter_z = std::numeric_limits<float>::quiet_NaN();
@@ -902,8 +922,8 @@ k4a_result_t K4AROSDevice::fillSegPointCloud(const k4a::image& pointcloud_image,
       *iter_z = kMillimeterToMeter * z;
 
       *iter_r = 255;
-      *iter_g = 255;
-      *iter_b = 255;
+      *iter_g = instance;
+      *iter_b = clss;
     }
   }
 

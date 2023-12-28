@@ -94,6 +94,8 @@ k4a_result_t getBodyMarker(const k4abt_body_t& body, visualization_msgs::MarkerP
   k4a_result_t fillSegPointCloud(const k4a::image& pointcloud_image, const cv::Mat& clss_image, const cv::Mat& instance_image,
                                    sensor_msgs::PointCloud2Ptr& point_cloud);
 
+  k4a_result_t initialize_table(const int w, const int h);
+
   void framePublisherThread();
   void clssSegCallback(const sensor_msgs::Image::ConstPtr& image_msg);
   void instanceSegCallback(const sensor_msgs::Image::ConstPtr& image_msg);
@@ -187,6 +189,9 @@ k4a_result_t getBodyMarker(const k4abt_body_t& body, visualization_msgs::MarkerP
   std::queue<std::pair<ros::Time, cv::Mat>> instance_seg_buffer_;
   std::mutex clss_seg_buffer_mutex_;
   std::mutex instance_seg_buffer_mutex_;
+
+  std::vector<size_t> mapping_table_;
+  bool is_table_initialized_;
 
 #if defined(K4A_BODY_TRACKING)
   // Body tracker
