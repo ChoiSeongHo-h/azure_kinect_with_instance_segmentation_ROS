@@ -1,59 +1,38 @@
-# Azure Kinect ROS Driver
+# azure_kinect_with_semantic_segmentation_ROS
+- Azure Kinect ROS publisher adding semantic information to point clouds
+- Azure Kinect driver required
+- Based on Azure Kinect ROS Driver (https://github.com/microsoft/Azure_Kinect_ROS_Driver)
+- Tested on Ubuntu 20.04
 
-This project is a node which publishes sensor data from the [Azure Kinect Developer Kit](https://azure.microsoft.com/en-us/services/kinect-dk/) to the [Robot Operating System (ROS)](http://www.ros.org/). Developers working with ROS can use this node to connect an Azure Kinect Developer Kit to an existing ROS installation.
+## System
+![image](https://github.com/ChoiSeongHo-h/azure_kinect_with_semantic_segmentation_ROS/assets/72921481/bfc549a9-c322-4961-a107-21246675379b)
+1. subscribe a single segmented image with instance information and a single segmented image with class information.
+2. publish a point cloud with instance information and class information.
+- Two input segmented images are 8-bit single channels.
+- Two input segmented image size: 640*480
+- The output point cloud is an RGB point cloud.
+- The G channel of an RGB point contains information about the instance.
+- The B channel of an RGB point contains information about the class.
 
-This repository uses the [Azure Kinect Sensor SDK](https://github.com/microsoft/Azure-Kinect-Sensor-SDK) to communicate with the Azure Kinect DK. It supports both Linux and Windows installations of ROS.
+### Managing resources
+- The system uses a queue to match past segmentation information with past depth information.
+- The queue stores up to 10 depth information, and space for all 10 images is pre-allocated on the heap.
+- The mapping from every pixel in the RGB image to every pixel in the depth image is cached.
 
-[![Build Status](https://dev.azure.com/ms/Azure_Kinect_ROS_Driver/_apis/build/status/microsoft.Azure_Kinect_ROS_Driver?branchName=melodic)](https://dev.azure.com/ms/Azure_Kinect_ROS_Driver/_build/latest?definitionId=166&branchName=melodic)
+## Usage
+- Install this package instead of the Azure Kinect ROS Driver (https://github.com/microsoft/Azure_Kinect_ROS_Driver).
+- Use the `seg_point_cloud = true` parameter to run.
 
-## Features
-
-This ROS node outputs a variety of sensor data, including:
-
-- A PointCloud2, optionally colored using the color camera
-- Raw color, depth and infrared Images, including CameraInfo messages containing calibration information
-- Rectified depth Images in the color camera resolution
-- Rectified color Images in the depth camera resolution
-- The IMU sensor stream
-- A TF2 model representing the extrinsic calibration of the camera
-
-The camera is fully configurable using a variety of options which can be specified in ROS launch files or on the command line.
-
-However, this node does ***not*** expose all the sensor data from the Azure Kinect Developer Kit hardware. It does not provide access to:
-
-- Microphone array
-
-For more information about how to use the node, please see the [usage guide](docs/usage.md).
-
-## Status
-
-This code is provided as a starting point for using the Azure Kinect Developer Kit with ROS. Community developed features are welcome.
-
-For information on how to contribute, please see our [contributing guide](CONTRIBUTING.md).
-
-## Building
-
-The Azure Kinect ROS Driver uses catkin to build. For instructions on how to build the project please see the 
-[building guide](docs/building.md).
-
-## Join Our Developer Program
-
-Complete your developer profile [here](https://aka.ms/iwantmr) to get connected with our Mixed Reality Developer Program. You will receive the latest on our developer tools, events, and early access offers.
-
-## Code of Conduct
-
-This project has adopted the [Microsoft Open Source Code of Conduct](https://opensource.microsoft.com/codeofconduct/).
-For more information see the [Code of Conduct FAQ](https://opensource.microsoft.com/codeofconduct/faq/) or
-contact [opencode@microsoft.com](mailto:opencode@microsoft.com) with any additional questions or comments.
-
-## Reporting Security Issues
-Security issues and bugs should be reported privately, via email, to the
-Microsoft Security Response Center (MSRC) at <[secure@microsoft.com](mailto:secure@microsoft.com)>.
-You should receive a response within 24 hours. If for some reason you do not, please follow up via
-email to ensure we received your original message. Further information, including the
-[MSRC PGP](https://technet.microsoft.com/en-us/security/dn606155) key, can be found in the
-[Security TechCenter](https://technet.microsoft.com/en-us/security/default).
-
-## License
-
-[MIT License](LICENSE)
+# YOLOv8 as an instance segmentation model
+- Set up the inputs for azure_kinect_with_semantic_segmentation_ROS using YOLOv8.
+## Merging segmentation information
+- The number of instance segmentation output layers in YOLOv8 is equal to the number of inferred objects.
+- Merge multiple output layers to create a single segmented instance image and a single segmented class image.
+- The masks of the output layers overlap.
+- Combining layers in an arbitrary order without handling overlaps creates class ambiguity in the overlaps.
+- Suppressing low-probability inferences with high-probability inferences reduces ambiguity.
+- The implementation sorts the inferred objects by probability and merges the output layers in the sorted order to produce the final output.
+- The final result is a erosion algorithm applied to reduce false segmentation of the border.
+## Usage
+- Install YOLOv8 (https://github.com/ultralytics/ultralytics)
+- `python3 seg_node.py`
