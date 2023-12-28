@@ -1,4 +1,4 @@
-# azure_kinect_with_semantic_segmentation_ROS
+# azure_kinect_with_instance_segmentation_ROS
 - Azure Kinect ROS publisher adding semantic information to point clouds
 - Azure Kinect driver required
 - Based on Azure Kinect ROS Driver (https://github.com/microsoft/Azure_Kinect_ROS_Driver)
@@ -24,7 +24,7 @@
 - Use the `seg_point_cloud = true` parameter to run.
 
 # YOLOv8 as an instance segmentation model
-- Set up the inputs for azure_kinect_with_semantic_segmentation_ROS using YOLOv8.
+- Set up the inputs for azure_kinect_with_instance_segmentation_ROS using YOLOv8.
 ## Merging segmentation information
 - The number of instance segmentation output layers in YOLOv8 is equal to the number of inferred objects.
 - Merge multiple output layers to create a single segmented instance image and a single segmented class image.
